@@ -1,0 +1,17 @@
+# Example R packages used across workflows
+Seurat
+DoubletFinder
+dplyr
+ggplot2
+patchwork
+readr
+Matrix
+tibble
+purrr
+tidyr
+pheatmap
+clusterProfiler
+org.Hs.eg.db
+slingshot
+SingleCellExperiment
+spacexr

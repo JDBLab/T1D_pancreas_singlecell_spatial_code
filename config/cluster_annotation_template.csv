@@ -1,0 +1,11 @@
+condition,cluster,celltype
+T0,0,Celltype_A
+T0,1,Celltype_B
+CTD5,0,Celltype_A
+CTD5,1,Celltype_B
+CTD10,0,Celltype_A
+CTD10,1,Celltype_B
+BTD5,0,Celltype_A
+BTD5,1,Celltype_B
+BTD10,0,Celltype_A
+BTD10,1,Celltype_B

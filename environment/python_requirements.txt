@@ -1,0 +1,11 @@
+anndata
+scanpy
+scvelo
+numpy
+pandas
+scipy
+matplotlib
+tifffile
+opencv-python
+jupyter
+stlearn
