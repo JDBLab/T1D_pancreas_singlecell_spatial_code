@@ -1,0 +1,276 @@
+# ============================================================
+# Jaccard comparison of cluster marker identity versus T0 anchors
+# ============================================================
+
+suppressPackageStartupMessages({
+  library(readxl)
+  library(dplyr)
+  library(stringr)
+  library(purrr)
+  library(writexl)
+})
+
+# ------------------------------------------------------------
+# Input workbook and sheets
+# ------------------------------------------------------------
+
+path <- "SUPPLEMENTAL DATASET 1 - T0-T5-T10-BT5-BT10.xlsx"
+
+sheets <- c("T0", "T5", "T10", "BT5", "BT10")
+
+# ------------------------------------------------------------
+# Thresholds used for cluster annotation
+# ------------------------------------------------------------
+
+PADJ_CUTOFF <- 0.05
+LOG2FC_CUTOFF <- 0.4
+
+# ------------------------------------------------------------
+# Helper function: assign broad lineage
+# ------------------------------------------------------------
+
+broad_lineage <- function(label) {
+  label <- trimws(as.character(label))
+
+  if (str_detect(label, "Hy") || str_detect(label, "D/A") || str_detect(label, "Hybrid")) {
+    return("Hybrid")
+  }
+
+  if (
+    str_detect(label, "Alpha") ||
+    str_detect(label, "alpha") ||
+    str_detect(label, "beta") ||
+    str_detect(label, "Delta") ||
+    str_detect(label, "Polyhormonal")
+  ) {
+    return("Endocrine")
+  }
+
+  if (str_starts(label, "Msn")) {
+    return("Msn")
+  }
+
+  if (str_starts(label, "Ma")) {
+    return("Ma")
+  }
+
+  if (label == "M1") {
+    return("M")
+  }
+
+  if (str_starts(label, "E")) {
+    return("E")
+  }
+
+  if (str_starts(label, "T")) {
+    return("T")
+  }
+
+  if (str_starts(label, "D")) {
+    return("D")
+  }
+
+  if (str_starts(label, "A")) {
+    return("A")
+  }
+
+  return("Other")
+}
+
+# ------------------------------------------------------------
+# Helper function: Jaccard similarity
+# ------------------------------------------------------------
+
+jaccard <- function(set_a, set_b) {
+  set_a <- unique(set_a)
+  set_b <- unique(set_b)
+
+  union_set <- union(set_a, set_b)
+
+  if (length(union_set) == 0) {
+    return(0)
+  }
+
+  length(intersect(set_a, set_b)) / length(union_set)
+}
+
+# ------------------------------------------------------------
+# Column names in workbook
+# ------------------------------------------------------------
+
+gene_col <- "gene"
+padj_col <- "p_val_adj"
+logfc_col <- "avg_log2FC"
+cluster_col <- "cluster"
+label_col <- "FINAL NOMENCLATURE"
+
+# ------------------------------------------------------------
+# Build filtered marker-gene sets for each cluster
+# ------------------------------------------------------------
+
+cluster_markers <- list()
+
+for (sheet in sheets) {
+
+  message("Reading sheet: ", sheet)
+
+  df <- read_excel(path, sheet = sheet)
+
+  required_cols <- c(gene_col, padj_col, logfc_col, cluster_col, label_col)
+
+  missing_cols <- setdiff(required_cols, colnames(df))
+
+  if (length(missing_cols) > 0) {
+    stop(
+      "Missing required columns in sheet ",
+      sheet,
+      ": ",
+      paste(missing_cols, collapse = ", ")
+    )
+  }
+
+  df_filtered <- df %>%
+    filter(
+      .data[[padj_col]] < PADJ_CUTOFF,
+      .data[[logfc_col]] >= LOG2FC_CUTOFF
+    ) %>%
+    mutate(
+      gene_clean = toupper(trimws(as.character(.data[[gene_col]]))),
+      cluster_clean = as.character(.data[[cluster_col]]),
+      label_clean = trimws(as.character(.data[[label_col]]))
+    )
+
+  marker_sets <- df_filtered %>%
+    group_by(cluster_clean, label_clean) %>%
+    summarise(
+      genes = list(unique(gene_clean)),
+      .groups = "drop"
+    )
+
+  for (i in seq_len(nrow(marker_sets))) {
+
+    key <- paste(
+      sheet,
+      marker_sets$cluster_clean[i],
+      marker_sets$label_clean[i],
+      sep = "||"
+    )
+
+    cluster_markers[[key]] <- list(
+      dataset = sheet,
+      cluster_id = marker_sets$cluster_clean[i],
+      label = marker_sets$label_clean[i],
+      genes = marker_sets$genes[[i]]
+    )
+  }
+}
+
+# ------------------------------------------------------------
+# Separate T0 anchors from all other clusters
+# ------------------------------------------------------------
+
+t0_anchors <- cluster_markers[
+  map_chr(cluster_markers, "dataset") == "T0"
+]
+
+query_clusters <- cluster_markers[
+  map_chr(cluster_markers, "dataset") != "T0"
+]
+
+# ------------------------------------------------------------
+# Compare each non-T0 cluster against T0 clusters
+# of the same broad lineage
+# ------------------------------------------------------------
+
+results <- list()
+
+for (query_name in names(query_clusters)) {
+
+  query <- query_clusters[[query_name]]
+
+  sheet <- query$dataset
+  cluster_id <- query$cluster_id
+  label <- query$label
+  genes <- query$genes
+
+  lineage <- broad_lineage(label)
+
+  candidates <- list()
+
+  for (anchor_name in names(t0_anchors)) {
+
+    anchor <- t0_anchors[[anchor_name]]
+    anchor_label <- anchor$label
+    anchor_lineage <- broad_lineage(anchor_label)
+
+    if (anchor_lineage == lineage) {
+
+      score <- jaccard(genes, anchor$genes)
+
+      candidates[[length(candidates) + 1]] <- data.frame(
+        anchor_label = anchor_label,
+        anchor_id = anchor$cluster_id,
+        score = score,
+        stringsAsFactors = FALSE
+      )
+    }
+  }
+
+  if (length(candidates) > 0) {
+
+    candidates_df <- bind_rows(candidates) %>%
+      arrange(desc(score))
+
+    best_label <- candidates_df$anchor_label[1]
+    best_anchor_id <- candidates_df$anchor_id[1]
+    best_score <- candidates_df$score[1]
+    maintained <- best_score >= 0.25
+
+  } else {
+
+    best_label <- NA
+    best_anchor_id <- NA
+    best_score <- NA
+    maintained <- FALSE
+  }
+
+  results[[length(results) + 1]] <- data.frame(
+    dataset = sheet,
+    cluster_id = suppressWarnings(as.integer(cluster_id)),
+    current_label = label,
+    lineage = lineage,
+    best_T0_match = best_label,
+    best_T0_cluster_id = suppressWarnings(as.integer(best_anchor_id)),
+    jaccard_to_best_T0 = best_score,
+    maintained_identity = maintained,
+    stringsAsFactors = FALSE
+  )
+}
+
+# ------------------------------------------------------------
+# Final results table
+# ------------------------------------------------------------
+
+results_df <- bind_rows(results) %>%
+  arrange(dataset, cluster_id)
+
+print(results_df)
+
+# ------------------------------------------------------------
+# Save results
+# ------------------------------------------------------------
+
+write_xlsx(
+  results_df,
+  "Jaccard_vs_T0_results.xlsx"
+)
+
+write.csv(
+  results_df,
+  "Jaccard_vs_T0_results.csv",
+  row.names = FALSE
+)
+
+message("Analysis complete. Results saved as:")
+message("Jaccard_vs_T0_results.xlsx")
+message("Jaccard_vs_T0_results.csv")
